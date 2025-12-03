@@ -9,6 +9,9 @@ class Airplane(Agent):
 
         # Aerolínea propietaria
         self.airline = airline
+        
+        # Código de vuelo único (formato: CÓDIGO_AEROLÍNEA + NÚMERO)
+        self.flight_code = f"{self.airline.code} {unique_id:03d}"
 
         # Estados posibles:
         # arriving, holding, waiting, queued_departure,

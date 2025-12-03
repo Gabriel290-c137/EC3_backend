@@ -49,6 +49,14 @@ class AirportModel(Model):
         max_holding_time=25,
         clima_manual="ninguno",      # override desde el panel
         usar_probabilidades=True,    # modo aleatorio
+        # Parámetros granulares opcionales (None = usar default del escenario)
+        arrival_rate=None,
+        max_ground=None,
+        turn_time=None,
+        takeoff_time=None,
+        max_release_per_step=None,
+        # Sistema de tiempo
+        minutes_per_step=5,          # Cada step = 5 minutos simulados
     ):
         super().__init__()
         self.schedule = RandomActivation(self)
@@ -65,37 +73,64 @@ class AirportModel(Model):
         self.clima_actual = "normal"
         self.factor_clima = 1.0
 
+        # ---------------------------
+        #   SISTEMA DE TIEMPO (24 HORAS)
+        # ---------------------------
+        self.minutes_per_step = minutes_per_step
+        self.current_hour = 6      # Comenzar a las 6:00 AM
+        self.current_minute = 0
+        
+        # Rastrear último cambio de clima para hacerlo más realista
+        self.last_clima_change_hour = 0
+        self.hours_until_next_clima_change = random.randint(4, 8)  # Cambiar cada 4-8 horas
+
         # ===============================
         #   CONFIGURACIÓN POR ESCENARIO
         # ===============================
+        # Valores base según escenario
         if scenario == "Equilibrio":
-            self.arrival_rate = 0.2
-            self.max_ground = 6
-            self.turn_time = 3
-            self.takeoff_time = 3
-            self.max_release_per_step = 3
+            base_arrival = 0.2
+            base_max_ground = 6
+            base_turn_time = 3
+            base_takeoff_time = 3
+            base_max_release = 3
 
         elif scenario == "Normal":
-            self.arrival_rate = 0.5
-            self.max_ground = 4
-            self.turn_time = 3
-            self.takeoff_time = 5
-            self.max_release_per_step = 2
+            base_arrival = 0.5
+            base_max_ground = 4
+            base_turn_time = 3
+            base_takeoff_time = 5
+            base_max_release = 2
 
         elif scenario == "Sobrecarga":
-            self.arrival_rate = 1.0
-            self.max_ground = 3
-            self.turn_time = 2
-            self.takeoff_time = 8
-            self.max_release_per_step = 1
+            base_arrival = 1.0
+            base_max_ground = 3
+            base_turn_time = 2
+            base_takeoff_time = 8
+            base_max_release = 1
+
+        elif scenario == "Libre":
+            # Modo Libre: valores base que serán sobreescritos por los sliders del usuario
+            base_arrival = 0.5
+            base_max_ground = 4
+            base_turn_time = 3
+            base_takeoff_time = 5
+            base_max_release = 2
 
         else:
             # Fallback
-            self.arrival_rate = 0.5
-            self.max_ground = 4
-            self.turn_time = 3
-            self.takeoff_time = 5
-            self.max_release_per_step = 2
+            base_arrival = 0.5
+            base_max_ground = 4
+            base_turn_time = 3
+            base_takeoff_time = 5
+            base_max_release = 2
+
+        # APLICAR OVERRIDES SI EXISTEN, SINO USAR BASE
+        self.arrival_rate = arrival_rate if arrival_rate is not None else base_arrival
+        self.max_ground = max_ground if max_ground is not None else base_max_ground
+        self.turn_time = turn_time if turn_time is not None else base_turn_time
+        self.takeoff_time = takeoff_time if takeoff_time is not None else base_takeoff_time
+        self.max_release_per_step = max_release_per_step if max_release_per_step is not None else base_max_release
 
         # Parámetros desde el servidor
         self.allow_diversion = allow_diversion
@@ -178,13 +213,54 @@ class AirportModel(Model):
         )
 
     # ====================================
+    # Sistema de Tiempo
+    # ====================================
+    def advance_time(self):
+        """Avanza el tiempo simulado."""
+        self.current_minute += self.minutes_per_step
+        if self.current_minute >= 60:
+            self.current_minute = 0
+            self.current_hour += 1
+            if self.current_hour >= 24:
+                self.current_hour = 0
+
+    def get_time_period(self):
+        """Retorna el período del día."""
+        if 5 <= self.current_hour < 7:
+            return "morning"  # Amanecer
+        elif 7 <= self.current_hour < 18:
+            return "day"      # Día
+        elif 18 <= self.current_hour < 20:
+            return "evening"  # Anochecer
+        else:
+            return "night"    # Noche
+
+    def get_time_multiplier(self):
+        """Retorna el multiplicador de tráfico según la hora."""
+        # Horas pico matutinas (6-9 AM)
+        if 6 <= self.current_hour < 9:
+            return 1.5
+        # Horas pico vespertinas (5-8 PM)
+        elif 17 <= self.current_hour < 20:
+            return 1.5
+        # Horas nocturnas (11 PM - 5 AM)
+        elif self.current_hour >= 23 or self.current_hour < 5:
+            return 0.3
+        # Horas normales
+        else:
+            return 1.0
+
+    # ====================================
     # Step Principal del Modelo
     # ====================================
     def step(self):
-        # 0) Actualizar clima (manual o probabilístico)
+        # 0) Avanzar tiempo simulado
+        self.advance_time()
+
+        # 0.1) Actualizar clima (manual o probabilístico)
         self.actualizar_clima()
 
-        # 0.1) Si es microburst → evento crítico
+        # 0.2) Si es microburst → evento crítico
         if self.clima_actual == "microburst":
             # Aplica el evento: desviar aviones y cerrar pistas
             self.aplicar_microburst()
@@ -192,24 +268,28 @@ class AirportModel(Model):
             self.datacollector.collect(self)
             return
 
-        # 1) Ajustar tasa de llegadas según el clima
+        # 1) Obtener multiplicadores de hora y clima
+        time_multiplier = self.get_time_multiplier()
+        
+        # 2) Ajustar tasa de llegadas según el clima y la hora
         #    Clima peor => factor_clima más alto => llegan menos aviones
+        #    Hora pico => time_multiplier alto => llegan más aviones
         if self.factor_clima > 0:
-            arrival_rate_efectiva = self.arrival_rate / self.factor_clima
+            arrival_rate_efectiva = (self.arrival_rate * time_multiplier) / self.factor_clima
         else:
-            arrival_rate_efectiva = self.arrival_rate
+            arrival_rate_efectiva = self.arrival_rate * time_multiplier
 
-        # 2) Crear avión según probabilidad AJUSTADA por clima
+        # 3) Crear avión según probabilidad AJUSTADA
         if random.random() < arrival_rate_efectiva:
             self.create_plane()
 
-        # 3) Actualizar pistas
+        # 4) Actualizar pistas
         self.update_runways()
 
-        # 4) Torre + Aeropuerto + Aerolíneas + Aviones
+        # 5) Torre + Aeropuerto + Aerolíneas + Aviones
         self.schedule.step()
 
-        # 5) Registrar datos
+        # 6) Registrar datos
         self.datacollector.collect(self)
 
     # ====================================
@@ -263,16 +343,27 @@ class AirportModel(Model):
     def actualizar_clima(self):
         """
         Decide el clima_actual en este tick:
-        - Si clima_manual != 'ninguno' → se usa ese
+        - Si clima_manual != 'ninguno' → se usa ese (siempre)
         - Si usar_probabilidades → sorteo según PROBABILIDADES_CLIMA
+          PERO solo cambia cada 4-8 horas para ser más realista
         """
         if self.clima_manual != "ninguno":
             self.clima_actual = self.clima_manual
         elif self.usar_probabilidades:
-            self.clima_actual = random.choices(
-                list(PROBABILIDADES_CLIMA.keys()),
-                weights=list(PROBABILIDADES_CLIMA.values())
-            )[0]
+            # Calcular horas desde el último cambio
+            hours_since_change = self.current_hour - self.last_clima_change_hour
+            if hours_since_change < 0:  # Cruzó medianoche
+                hours_since_change += 24
+            
+            # Solo cambiar clima si han pasado suficientes horas
+            if hours_since_change >= self.hours_until_next_clima_change:
+                self.clima_actual = random.choices(
+                    list(PROBABILIDADES_CLIMA.keys()),
+                    weights=list(PROBABILIDADES_CLIMA.values())
+                )[0]
+                # Registrar el cambio y programar el próximo
+                self.last_clima_change_hour = self.current_hour
+                self.hours_until_next_clima_change = random.randint(4, 8)
         else:
             # Si no hay nada configurado, se queda el último
             pass
@@ -338,6 +429,11 @@ class AirportModel(Model):
                 "tipo": clima_actual,
                 "viento_intensidad": factor,
                 "visibilidad": 1.0 / factor if factor > 0 else 0.0,
+            },
+            "time": {
+                "hour": self.current_hour,
+                "minute": self.current_minute,
+                "period": self.get_time_period(),
             },
             "aerolineas": [],
         }

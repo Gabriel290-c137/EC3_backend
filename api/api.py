@@ -22,7 +22,7 @@ app.add_middleware(
 # =========================================
 #   CONFIG / TIPOS
 # =========================================
-ScenarioType = Literal["Equilibrio", "Normal", "Sobrecarga"]
+ScenarioType = Literal["Equilibrio", "Normal", "Sobrecarga", "Libre"]
 ClimaType = Literal[
     "ninguno",
     "normal",
@@ -44,6 +44,16 @@ class SimulationConfig(BaseModel):
     max_holding_time: int = 10
     clima_manual: ClimaType = "ninguno"
     usar_probabilidades: bool = True
+    
+    # Parámetros granulares (opcionales)
+    arrival_rate: Optional[float] = None
+    max_ground: Optional[int] = None
+    turn_time: Optional[int] = None
+    takeoff_time: Optional[int] = None
+    max_release_per_step: Optional[int] = None
+    
+    # Sistema de tiempo
+    minutes_per_step: Optional[int] = 5
 
 
 # =========================================
@@ -72,6 +82,7 @@ def serialize_model(m: AirportModel) -> Dict[str, Any]:
         planes_data.append(
             {
                 "id": p.unique_id,
+                "flight_code": p.flight_code,
                 "x": x,
                 "y": y,
                 "state": p.state,
@@ -127,6 +138,11 @@ def serialize_model(m: AirportModel) -> Dict[str, Any]:
             "tipo": m.clima_actual,
             "factor": m.factor_clima,
         },
+        "time": {
+            "hour": m.current_hour,
+            "minute": m.current_minute,
+            "period": m.get_time_period(),
+        },
     }
 
     # ---------- PISTAS ----------
@@ -150,6 +166,12 @@ def serialize_model(m: AirportModel) -> Dict[str, Any]:
         "max_holding_time": m.max_holding_time,
         "clima_manual": m.clima_manual,
         "usar_probabilidades": m.usar_probabilidades,
+        # Devolver también los valores efectivos
+        "arrival_rate": m.arrival_rate,
+        "max_ground": m.max_ground,
+        "turn_time": m.turn_time,
+        "takeoff_time": m.takeoff_time,
+        "max_release_per_step": m.max_release_per_step,
     }
 
     # 🔹 Esto es lo que usará Svelte como SimulationSnapshot
@@ -180,6 +202,13 @@ def reset_simulacion(config: SimulationConfig):
         max_holding_time=config.max_holding_time,
         clima_manual=config.clima_manual,
         usar_probabilidades=config.usar_probabilidades,
+        # Nuevos parámetros
+        arrival_rate=config.arrival_rate,
+        max_ground=config.max_ground,
+        turn_time=config.turn_time,
+        takeoff_time=config.takeoff_time,
+        max_release_per_step=config.max_release_per_step,
+        minutes_per_step=config.minutes_per_step or 5,
     )
     current_step = 0
     return serialize_model(current_model)
