@@ -2,6 +2,7 @@ from mesa import Agent
 import random
 import math
 
+
 class Airplane(Agent):
     def __init__(self, unique_id, model, airline):
         super().__init__(unique_id, model)
@@ -119,7 +120,13 @@ class Airplane(Agent):
     def step(self):
 
         # -------------------------------------------------------
-        # 0) CONSUMO DE COMBUSTIBLE + ACTIVACIÓN EMERGENCIA
+        # 0) GO-AROUND: cuenta atrás del parpadeo morado
+        # -------------------------------------------------------
+        if getattr(self, "goaround_blink", 0) > 0:
+            self.goaround_blink -= 1
+
+        # -------------------------------------------------------
+        # 0.bis) CONSUMO DE COMBUSTIBLE + ACTIVACIÓN EMERGENCIA
         # -------------------------------------------------------
         if self.state in ("arriving", "holding"):
             self.combustible_restante = max(0, self.combustible_restante - 1)
@@ -164,18 +171,13 @@ class Airplane(Agent):
 
             self.holding_time += 1
 
-            # 🔁 GO-AROUND ALEATORIO:
-            # simulamos que de golpe el combustible cae muy rápido y
-            # el avión pasa a emergencia (parpadeo morado → luego rojo)
+            # GO-AROUND / caída brusca de combustible
             if (not self.emergencia) and random.random() < 0.03:
-                # caída brusca de combustible
                 self.combustible_restante = max(
                     0, self.combustible_restante - random.randint(20, 40)
                 )
-                # marcar emergencia y prioridad máxima
                 self.emergencia = True
                 self.prioridad = 2
-                # parpadeo morado unos ticks
                 self.goaround_blink = 2
 
             # DESVÍO (solo si NO es emergencia)
@@ -210,6 +212,13 @@ class Airplane(Agent):
         # 3) EN TIERRA
         # -------------------------------------------------------
         if self.state == "waiting":
+            # 🆕 al estar en tierra, consideramos resuelta la emergencia
+            if self.emergencia:
+                self.emergencia = False
+                # si quieres, baja la prioridad a "retrasado" o normal
+                if self.prioridad == 2:
+                    self.prioridad = 1
+
             self.wait_time -= 1
             if self.wait_time <= 0:
                 self.state = "queued_departure"
@@ -226,6 +235,15 @@ class Airplane(Agent):
         # 5) DESPEGANDO
         # -------------------------------------------------------
         if self.state == "departing":
+            # 🆕 AL DESPEGAR: limpiar emergencia para que el front lo pinte blanco
+            if self.emergencia:
+                self.emergencia = False
+            # opcional: limpiar prioridad máxima
+            if self.prioridad == 2:
+                self.prioridad = 1
+            # opcional: ya no tiene sentido el blink en salida
+            self.goaround_blink = 0
+
             self.move_towards(self.exit_target)
             if self.pos == self.exit_target:
                 self.state = "gone"

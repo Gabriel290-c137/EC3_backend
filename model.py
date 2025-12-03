@@ -296,3 +296,72 @@ class AirportModel(Model):
         for rw in self.runways:
             rw["busy"] = True
             rw["remaining"] = 999999  # efecto: nunca se liberan mientras dure el evento
+
+    # ====================================
+    #  SERIALIZACIÓN PARA EL FRONTEND
+    # ====================================
+    def serialize(self):
+        positions = []
+        for p in self.planes:
+            if not hasattr(p, "pos") or p.pos is None:
+                continue
+
+            x, y = p.pos
+            cx, cy = self.airport_center
+            dx = x - cx
+            dy = y - cy
+            distancia = (dx**2 + dy**2) ** 0.5
+
+            positions.append(
+                {
+                    "id": p.unique_id,
+                    "x": x,
+                    "y": y,
+                    "airline": getattr(p.airline, "name", "N/A"),
+                    "state": getattr(p, "state", "unknown"),
+                    "prioridad": getattr(p, "prioridad", 0),
+                    "combustible": getattr(p, "combustible_restante", 0),
+                    "emergencia": getattr(p, "emergencia", False),
+                    "goaround_blink": getattr(p, "goaround_blink", 0),
+                    "distancia": distancia,
+                    "desviado": getattr(p, "state", "") == "diverted",
+                }
+            )
+
+        clima_actual = getattr(self, "clima_actual", "normal")
+        factor = getattr(self, "factor_clima", 1.0)
+
+        metrics = {
+            "costos_totales": 0,
+            "reordenamientos": 0,
+            "clima": {
+                "tipo": clima_actual,
+                "viento_intensidad": factor,
+                "visibilidad": 1.0 / factor if factor > 0 else 0.0,
+            },
+            "aerolineas": [],
+        }
+
+        for al in self.airlines:
+            vuelos = len(al.fleet)
+            desvios = sum(
+                1
+                for p in self.planes
+                if getattr(p, "airline", None) is al
+                and getattr(p, "state", "") == "diverted"
+            )
+            metrics["aerolineas"].append(
+                {
+                    "nombre": al.name,
+                    "vuelos": vuelos,
+                    "costo": 0,
+                    "retraso_promedio": 0,
+                    "desvios": desvios,
+                }
+            )
+
+        return {
+            "step": self.schedule.steps,
+            "positions": positions,
+            "metrics": metrics,
+        }
