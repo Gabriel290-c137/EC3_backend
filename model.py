@@ -1,4 +1,4 @@
-# model.py
+# model.py - VERSIÓN MEJORADA CON MÉTRICAS AVANZADAS
 from mesa import Model
 from mesa.time import RandomActivation
 from mesa.space import MultiGrid
@@ -8,37 +8,27 @@ import random
 from agentes.airport import Airport
 from agentes.airplane import Airplane
 from agentes.airline import Airline
-from agentes.controltower import ControlTower   # 👈 IMPORTANTE
+from agentes.controltower import ControlTower
 
-
-# ==========================
-#   CLIMA (CONSTANTES)
-# ==========================
-CLIMAS = [
-    "normal",
-    "lluvia",
-    "tormenta",
-    "viento_fuerte",
-    "niebla",
-    "microburst",   # evento extremo
-]
+# Constantes de clima (sin cambios)
+CLIMAS = ["normal", "lluvia", "tormenta", "viento_fuerte", "niebla", "microburst"]
 
 PROBABILIDADES_CLIMA = {
-    "normal":        0.54,
-    "lluvia":        0.20,
-    "tormenta":      0.10,
+    "normal": 0.54,
+    "lluvia": 0.20,
+    "tormenta": 0.10,
     "viento_fuerte": 0.10,
-    "niebla":        0.05,
-    "microburst":    0.01,   # microburst raro pero posible
+    "niebla": 0.05,
+    "microburst": 0.01,
 }
 
 FACTOR_CLIMA = {
-    "normal":        1.0,   # día perfecto
-    "lluvia":        1.4,   # algo más complicado
-    "niebla":        1.6,   # visibilidad mala
-    "viento_fuerte": 1.7,   # turbulencia fuerte
-    "tormenta":      2.0,   # casi colapsado
-    "microburst":    999,   # evento crítico: cierre total
+    "normal": 1.0,
+    "lluvia": 1.4,
+    "niebla": 1.6,
+    "viento_fuerte": 1.7,
+    "tormenta": 2.0,
+    "microburst": 999,
 }
 
 class AirportModel(Model):
@@ -47,103 +37,89 @@ class AirportModel(Model):
         scenario="Equilibrio",
         allow_diversion=False,
         max_holding_time=25,
-        clima_manual="ninguno",      # override desde el panel
-        usar_probabilidades=True,    # modo aleatorio
-        # Parámetros granulares opcionales (None = usar default del escenario)
+        clima_manual="ninguno",
+        usar_probabilidades=True,
         arrival_rate=None,
         max_ground=None,
         turn_time=None,
         takeoff_time=None,
         max_release_per_step=None,
-        # Sistema de tiempo
-        minutes_per_step=5,          # Cada step = 5 minutos simulados
+        minutes_per_step=5,
     ):
         super().__init__()
         self.schedule = RandomActivation(self)
         self.grid = MultiGrid(20, 20, torus=False)
 
-        # Guardamos el escenario
         self.scenario = scenario
-
-        # ---------------------------
-        #   ESTADO DE CLIMA
-        # ---------------------------
-        self.clima_manual = clima_manual          # "ninguno" = no forzar
+        self.clima_manual = clima_manual
         self.usar_probabilidades = usar_probabilidades
         self.clima_actual = "normal"
         self.factor_clima = 1.0
 
-        # ---------------------------
-        #   SISTEMA DE TIEMPO (24 HORAS)
-        # ---------------------------
+        # Sistema de tiempo
         self.minutes_per_step = minutes_per_step
-        self.current_hour = 6      # Comenzar a las 6:00 AM
+        self.current_hour = 6
         self.current_minute = 0
-        
-        # Rastrear último cambio de clima para hacerlo más realista
         self.last_clima_change_hour = 0
-        self.hours_until_next_clima_change = random.randint(4, 8)  # Cambiar cada 4-8 horas
+        self.hours_until_next_clima_change = random.randint(4, 8)
 
-        # ===============================
-        #   CONFIGURACIÓN POR ESCENARIO
-        # ===============================
-        # Valores base según escenario
+        # Configuración por escenario
         if scenario == "Equilibrio":
             base_arrival = 0.2
             base_max_ground = 6
             base_turn_time = 3
             base_takeoff_time = 3
             base_max_release = 3
-
         elif scenario == "Normal":
             base_arrival = 0.5
             base_max_ground = 4
             base_turn_time = 3
             base_takeoff_time = 5
             base_max_release = 2
-
         elif scenario == "Sobrecarga":
             base_arrival = 1.0
             base_max_ground = 3
             base_turn_time = 2
             base_takeoff_time = 8
             base_max_release = 1
-
         elif scenario == "Libre":
-            # Modo Libre: valores base que serán sobreescritos por los sliders del usuario
             base_arrival = 0.5
             base_max_ground = 4
             base_turn_time = 3
             base_takeoff_time = 5
             base_max_release = 2
-
         else:
-            # Fallback
             base_arrival = 0.5
             base_max_ground = 4
             base_turn_time = 3
             base_takeoff_time = 5
             base_max_release = 2
 
-        # APLICAR OVERRIDES SI EXISTEN, SINO USAR BASE
         self.arrival_rate = arrival_rate if arrival_rate is not None else base_arrival
         self.max_ground = max_ground if max_ground is not None else base_max_ground
         self.turn_time = turn_time if turn_time is not None else base_turn_time
         self.takeoff_time = takeoff_time if takeoff_time is not None else base_takeoff_time
         self.max_release_per_step = max_release_per_step if max_release_per_step is not None else base_max_release
 
-        # Parámetros desde el servidor
         self.allow_diversion = allow_diversion
         self.max_holding_time = max_holding_time
 
-        # Identificadores
         self.next_id = 0
         self.planes = []
 
-        # Contadores para métricas
+        # Contadores básicos
         self.total_arrivals = 0
         self.total_departures = 0
         self.total_diverted = 0
+
+        # ====================================
+        # NUEVAS MÉTRICAS AVANZADAS
+        # ====================================
+        self.total_holding_time_accumulated = 0  # Tiempo total en holding (todos los aviones)
+        self.runway_busy_time = 0                 # Ticks totales que las pistas estuvieron ocupadas
+        self.total_fuel_consumed = 0              # Combustible total consumido
+        self.emergency_events = 0                 # Total de emergencias que ocurrieron
+        self.goaround_events = 0                  # Total de go-arounds
 
         # Aerolíneas
         self.airlines = []
@@ -157,7 +133,7 @@ class AirportModel(Model):
             self.airlines.append(al)
             self.schedule.add(al)
 
-        # Pistas simples (NO agentes)
+        # Pistas
         self.runways = [
             {"busy": False, "remaining": 0, "plane": None},
             {"busy": False, "remaining": 0, "plane": None},
@@ -175,48 +151,97 @@ class AirportModel(Model):
         # Torre de control
         self.control_tower = ControlTower("tower", self)
         self.schedule.add(self.control_tower)
-
-        # La torre justo encima del aeropuerto
         self.grid.place_agent(
             self.control_tower,
             (self.airport_center[0], self.airport_center[1] - 1)
         )
 
-        # ===============================
-        #   DATA COLLECTOR NUEVO
-        # ===============================
+        # ====================================
+        # DATA COLLECTOR MEJORADO
+        # ====================================
         self.datacollector = DataCollector(
             model_reporters={
+                # Métricas básicas
                 "Llegadas": lambda m: m.total_arrivals,
                 "Salidas": lambda m: m.total_departures,
-                # Retrasados = prioridad 1
-                "En_espera": lambda m: sum(
-                    1 for p in m.planes if getattr(p, "prioridad", 0) == 1
-                ),
-                # Emergencias rojas
-                "Emergencias": lambda m: sum(
-                    1 for p in m.planes if getattr(p, "emergencia", False)
-                ),
-                # Desviados
+                "En_espera": lambda m: sum(1 for p in m.planes if getattr(p, "prioridad", 0) == 1),
+                "Emergencias": lambda m: sum(1 for p in m.planes if getattr(p, "emergencia", False)),
                 "Desviados": lambda m: m.total_diverted,
+                
+                # NUEVAS MÉTRICAS AVANZADAS
+                "Aviones_en_holding": lambda m: len(m.holding_planes),
+                "Tiempo_holding_promedio": lambda m: m.get_avg_holding_time(),
+                "Utilizacion_pistas": lambda m: m.get_runway_utilization(),
+                "Throughput": lambda m: m.get_throughput(),
+                "Eficiencia_combustible": lambda m: m.get_fuel_efficiency(),
+                "Tasa_emergencias": lambda m: m.get_emergency_rate(),
             }
         )
 
     # ====================================
-    # Helpers
+    # NUEVOS MÉTODOS PARA MÉTRICAS
     # ====================================
+    
+    def get_avg_holding_time(self):
+        """Retorna el tiempo promedio en holding de los aviones actualmente en espera."""
+        if not self.holding_planes:
+            return 0
+        return sum(p.holding_time for p in self.holding_planes) / len(self.holding_planes)
+    
+    def get_runway_utilization(self):
+        """
+        Calcula el % de utilización de pistas.
+        100% = todas las pistas ocupadas todo el tiempo
+        """
+        if self.schedule.steps == 0:
+            return 0
+        
+        total_capacity = len(self.runways) * self.schedule.steps
+        return (self.runway_busy_time / total_capacity) * 100 if total_capacity > 0 else 0
+    
+    def get_throughput(self):
+        """
+        Retorna aviones procesados por hora simulada.
+        (Arrivals + Departures) / horas transcurridas
+        """
+        horas_transcurridas = (self.schedule.steps * self.minutes_per_step) / 60
+        if horas_transcurridas == 0:
+            return 0
+        
+        total_procesados = self.total_arrivals + self.total_departures
+        return total_procesados / horas_transcurridas
+    
+    def get_fuel_efficiency(self):
+        """
+        Calcula eficiencia de combustible.
+        Menor tiempo en holding = mayor eficiencia
+        """
+        if self.total_arrivals == 0:
+            return 100
+        
+        # Eficiencia inversa al tiempo en holding
+        avg_holding = self.total_holding_time_accumulated / max(self.total_arrivals, 1)
+        eficiencia = max(0, 100 - (avg_holding * 2))  # -2 puntos por cada tick de holding
+        return eficiencia
+    
+    def get_emergency_rate(self):
+        """Retorna el % de vuelos que tuvieron emergencias."""
+        total_flights = self.total_arrivals + len(self.planes)
+        if total_flights == 0:
+            return 0
+        return (self.emergency_events / total_flights) * 100
+
+    # ====================================
+    # MÉTODOS EXISTENTES (SIN CAMBIOS)
+    # ====================================
+    
     def planes_on_ground(self):
-        """Cuenta aviones en tierra (waiting, queued_dep, departing)."""
         return sum(
             1 for p in self.planes
             if p.state in ("waiting", "queued_departure", "departing")
         )
 
-    # ====================================
-    # Sistema de Tiempo
-    # ====================================
     def advance_time(self):
-        """Avanza el tiempo simulado."""
         self.current_minute += self.minutes_per_step
         if self.current_minute >= 60:
             self.current_minute = 0
@@ -225,76 +250,65 @@ class AirportModel(Model):
                 self.current_hour = 0
 
     def get_time_period(self):
-        """Retorna el período del día."""
         if 5 <= self.current_hour < 7:
-            return "morning"  # Amanecer
+            return "morning"
         elif 7 <= self.current_hour < 18:
-            return "day"      # Día
+            return "day"
         elif 18 <= self.current_hour < 20:
-            return "evening"  # Anochecer
+            return "evening"
         else:
-            return "night"    # Noche
+            return "night"
 
     def get_time_multiplier(self):
-        """Retorna el multiplicador de tráfico según la hora."""
-        # Horas pico matutinas (6-9 AM)
         if 6 <= self.current_hour < 9:
             return 1.5
-        # Horas pico vespertinas (5-8 PM)
         elif 17 <= self.current_hour < 20:
             return 1.5
-        # Horas nocturnas (11 PM - 5 AM)
         elif self.current_hour >= 23 or self.current_hour < 5:
             return 0.3
-        # Horas normales
         else:
             return 1.0
 
     # ====================================
-    # Step Principal del Modelo
+    # STEP MEJORADO
     # ====================================
+    
     def step(self):
-        # 0) Avanzar tiempo simulado
+        # Avanzar tiempo
         self.advance_time()
 
-        # 0.1) Actualizar clima (manual o probabilístico)
+        # Actualizar clima
         self.actualizar_clima()
 
-        # 0.2) Si es microburst → evento crítico
+        # Microburst: evento crítico
         if self.clima_actual == "microburst":
-            # Aplica el evento: desviar aviones y cerrar pistas
             self.aplicar_microburst()
-            # Igualmente registramos métricas del tick
             self.datacollector.collect(self)
             return
 
-        # 1) Obtener multiplicadores de hora y clima
+        # Calcular tasa de llegadas ajustada
         time_multiplier = self.get_time_multiplier()
-        
-        # 2) Ajustar tasa de llegadas según el clima y la hora
-        #    Clima peor => factor_clima más alto => llegan menos aviones
-        #    Hora pico => time_multiplier alto => llegan más aviones
         if self.factor_clima > 0:
             arrival_rate_efectiva = (self.arrival_rate * time_multiplier) / self.factor_clima
         else:
             arrival_rate_efectiva = self.arrival_rate * time_multiplier
 
-        # 3) Crear avión según probabilidad AJUSTADA
+        # Crear avión según probabilidad
         if random.random() < arrival_rate_efectiva:
             self.create_plane()
 
-        # 4) Actualizar pistas
+        # Actualizar pistas Y contabilizar utilización
         self.update_runways()
 
-        # 5) Torre + Aeropuerto + Aerolíneas + Aviones
+        # Torre + Aeropuerto + Aerolíneas + Aviones
         self.schedule.step()
 
-        # 6) Registrar datos
+        # Acumular tiempo en holding
+        self.total_holding_time_accumulated += len(self.holding_planes)
+
+        # Registrar datos
         self.datacollector.collect(self)
 
-    # ====================================
-    # Crear / eliminar aviones
-    # ====================================
     def create_plane(self):
         airline = random.choice(self.airlines)
         plane = Airplane(self.next_id, self, airline)
@@ -302,13 +316,18 @@ class AirportModel(Model):
 
         self.planes.append(plane)
         self.schedule.add(plane)
-
         airline.register_plane(plane)
 
         x, y = plane.spawn_pos
         self.grid.place_agent(plane, (x, y))
 
     def remove_plane(self, plane):
+        # Registrar vuelo completado en la aerolínea
+        if plane.state == "gone":
+            plane.airline.register_completed_flight(plane)
+        elif plane.state == "diverted":
+            plane.airline.register_diversion()
+        
         if plane in self.planes:
             self.planes.remove(plane)
         try:
@@ -325,73 +344,48 @@ class AirportModel(Model):
         if plane in self.departure_queue:
             self.departure_queue.remove(plane)
 
-    # ====================================
-    # Lógica de pistas
-    # ====================================
     def update_runways(self):
-        """Cuenta regresiva de ocupación de pistas."""
+        """Actualiza pistas Y contabiliza tiempo ocupado."""
         for rw in self.runways:
             if rw["busy"]:
+                self.runway_busy_time += 1  # Contabilizar utilización
                 rw["remaining"] -= 1
                 if rw["remaining"] <= 0:
                     rw["busy"] = False
                     rw["plane"] = None
 
-    # ====================================
-    # Clima: actualización y efectos
-    # ====================================
     def actualizar_clima(self):
-        """
-        Decide el clima_actual en este tick:
-        - Si clima_manual != 'ninguno' → se usa ese (siempre)
-        - Si usar_probabilidades → sorteo según PROBABILIDADES_CLIMA
-          PERO solo cambia cada 4-8 horas para ser más realista
-        """
         if self.clima_manual != "ninguno":
             self.clima_actual = self.clima_manual
         elif self.usar_probabilidades:
-            # Calcular horas desde el último cambio
             hours_since_change = self.current_hour - self.last_clima_change_hour
-            if hours_since_change < 0:  # Cruzó medianoche
+            if hours_since_change < 0:
                 hours_since_change += 24
             
-            # Solo cambiar clima si han pasado suficientes horas
             if hours_since_change >= self.hours_until_next_clima_change:
                 self.clima_actual = random.choices(
                     list(PROBABILIDADES_CLIMA.keys()),
                     weights=list(PROBABILIDADES_CLIMA.values())
                 )[0]
-                # Registrar el cambio y programar el próximo
                 self.last_clima_change_hour = self.current_hour
                 self.hours_until_next_clima_change = random.randint(4, 8)
         else:
-            # Si no hay nada configurado, se queda el último
             pass
 
-        # Actualizar factor_clima
         self.factor_clima = FACTOR_CLIMA.get(self.clima_actual, 1.0)
 
     def aplicar_microburst(self):
-        """
-        Evento extremo:
-        - Cierra el aeropuerto (no más aterrizajes/despegues)
-        - Todos los aviones en llegada / holding se desvían
-        """
-        # Desviar aviones que aún no tocaron tierra
         for plane in list(self.planes):
             if plane.state in ("arriving", "holding"):
                 plane.state = "diverted"
                 self.total_diverted += 1
 
-        # Marcar las pistas como 'cerradas' poniéndolas siempre ocupadas
         for rw in self.runways:
             rw["busy"] = True
-            rw["remaining"] = 999999  # efecto: nunca se liberan mientras dure el evento
+            rw["remaining"] = 999999
 
-    # ====================================
-    #  SERIALIZACIÓN PARA EL FRONTEND
-    # ====================================
     def serialize(self):
+        # (Tu método serialize existente sin cambios)
         positions = []
         for p in self.planes:
             if not hasattr(p, "pos") or p.pos is None:
@@ -403,21 +397,19 @@ class AirportModel(Model):
             dy = y - cy
             distancia = (dx**2 + dy**2) ** 0.5
 
-            positions.append(
-                {
-                    "id": p.unique_id,
-                    "x": x,
-                    "y": y,
-                    "airline": getattr(p.airline, "name", "N/A"),
-                    "state": getattr(p, "state", "unknown"),
-                    "prioridad": getattr(p, "prioridad", 0),
-                    "combustible": getattr(p, "combustible_restante", 0),
-                    "emergencia": getattr(p, "emergencia", False),
-                    "goaround_blink": getattr(p, "goaround_blink", 0),
-                    "distancia": distancia,
-                    "desviado": getattr(p, "state", "") == "diverted",
-                }
-            )
+            positions.append({
+                "id": p.unique_id,
+                "x": x,
+                "y": y,
+                "airline": getattr(p.airline, "name", "N/A"),
+                "state": getattr(p, "state", "unknown"),
+                "prioridad": getattr(p, "prioridad", 0),
+                "combustible": getattr(p, "combustible_restante", 0),
+                "emergencia": getattr(p, "emergencia", False),
+                "goaround_blink": getattr(p, "goaround_blink", 0),
+                "distancia": distancia,
+                "desviado": getattr(p, "state", "") == "diverted",
+            })
 
         clima_actual = getattr(self, "clima_actual", "normal")
         factor = getattr(self, "factor_clima", 1.0)
@@ -441,20 +433,17 @@ class AirportModel(Model):
         for al in self.airlines:
             vuelos = len(al.fleet)
             desvios = sum(
-                1
-                for p in self.planes
+                1 for p in self.planes
                 if getattr(p, "airline", None) is al
                 and getattr(p, "state", "") == "diverted"
             )
-            metrics["aerolineas"].append(
-                {
-                    "nombre": al.name,
-                    "vuelos": vuelos,
-                    "costo": 0,
-                    "retraso_promedio": 0,
-                    "desvios": desvios,
-                }
-            )
+            metrics["aerolineas"].append({
+                "nombre": al.name,
+                "vuelos": vuelos,
+                "costo": 0,
+                "retraso_promedio": 0,
+                "desvios": desvios,
+            })
 
         return {
             "step": self.schedule.steps,
