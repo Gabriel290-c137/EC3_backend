@@ -45,6 +45,7 @@ class AirportModel(Model):
         takeoff_time=None,
         max_release_per_step=None,
         minutes_per_step=5,
+        control_policy="dynamic", 
     ):
         super().__init__()
         self.schedule = RandomActivation(self)
@@ -55,6 +56,9 @@ class AirportModel(Model):
         self.usar_probabilidades = usar_probabilidades
         self.clima_actual = "normal"
         self.factor_clima = 1.0
+
+        # 🆕 POLÍTICA DE CONTROL
+        self.control_policy = control_policy  # "fixed", "fuel_priority", "dynamic"
 
         # Sistema de tiempo
         self.minutes_per_step = minutes_per_step
@@ -168,13 +172,19 @@ class AirportModel(Model):
                 "Emergencias": lambda m: sum(1 for p in m.planes if getattr(p, "emergencia", False)),
                 "Desviados": lambda m: m.total_diverted,
                 
-                # NUEVAS MÉTRICAS AVANZADAS
+                # MÉTRICAS AVANZADAS
                 "Aviones_en_holding": lambda m: len(m.holding_planes),
                 "Tiempo_holding_promedio": lambda m: m.get_avg_holding_time(),
                 "Utilizacion_pistas": lambda m: m.get_runway_utilization(),
                 "Throughput": lambda m: m.get_throughput(),
                 "Eficiencia_combustible": lambda m: m.get_fuel_efficiency(),
                 "Tasa_emergencias": lambda m: m.get_emergency_rate(),
+
+                 # 🆕 NUEVAS MÉTRICAS
+                "Tipos_aeronaves": lambda m: self._count_aircraft_types(m),
+                "Vuelos_puntuales": lambda m: sum(1 for p in m.planes if getattr(p, "punctuality_status", "") == "on_time"),
+                "Vuelos_retrasados": lambda m: sum(1 for p in m.planes if getattr(p, "punctuality_status", "") == "delayed"),
+                "Vuelos_adelantados": lambda m: sum(1 for p in m.planes if getattr(p, "punctuality_status", "") == "early"),
             }
         )
 
@@ -268,6 +278,14 @@ class AirportModel(Model):
             return 0.3
         else:
             return 1.0
+        
+    def _count_aircraft_types(self, m):
+        """Cuenta aviones por tipo."""
+        types = {}
+        for p in m.planes:
+            t = getattr(p, "aircraft_type", "Unknown")
+            types[t] = types.get(t, 0) + 1
+        return types
 
     # ====================================
     # STEP MEJORADO

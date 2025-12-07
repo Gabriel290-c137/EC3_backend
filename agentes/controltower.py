@@ -3,13 +3,10 @@ from mesa import Agent
 
 class ControlTower(Agent):
     """
-    Torre de Control con algoritmo multicriterio avanzado.
-    
-    Funciones principales:
-    - Secuenciación inteligente de aterrizajes (holding -> arriving)
-    - Asignación óptima de pistas para despegues
-    - Adaptación dinámica a condiciones climáticas
-    - Optimización basada en múltiples criterios
+    Torre de Control con 3 políticas de secuenciación:
+    1. FCFS (First Come First Served) - Asignación fija
+    2. FUEL_PRIORITY - Asignación basada solo en combustible
+    3. DYNAMIC - Algoritmo multicriterio adaptativo
     """
 
     def __init__(self, unique_id, model):
@@ -26,67 +23,93 @@ class ControlTower(Agent):
     
     def programar_aterrizaje(self, aviones_en_espera):
         """
-        Ordena aviones usando algoritmo multicriterio avanzado con pesos adaptativos.
+        Ordena aviones según la política de control activa.
         
-        Criterios (en orden de importancia):
-        1. Prioridad (2=emergencia, 1=retrasado, 0=normal)
-        2. Combustible restante (menos combustible = mayor urgencia)
-        3. Tiempo en holding (más tiempo = mayor prioridad)
-        4. ID de llegada (FIFO como último criterio)
-        
-        Los pesos se adaptan según:
-        - Condiciones climáticas actuales
-        - Nivel de congestión del aeropuerto
-        - Número de emergencias activas
+        Políticas disponibles:
+        - "fixed" (FCFS): First Come First Served
+        - "fuel_priority": Solo por combustible restante
+        - "dynamic": Multicriterio adaptativo (RECOMENDADO)
         """
         if not aviones_en_espera:
             return []
         
-        # ==========================================
-        # PASO 1: Determinar pesos adaptativos
-        # ==========================================
-        pesos = self._calcular_pesos_adaptativos()
+        policy = getattr(self.model, "control_policy", "dynamic")
         
         # ==========================================
-        # PASO 2: Calcular score para cada avión
+        # POLÍTICA 1: FCFS (Asignación Fija)
         # ==========================================
-        def calcular_score(p):
-            # Normalizar valores a rango [0, 1]
-            prioridad_norm = p.prioridad / 2.0  # 0, 0.5, o 1.0
+        if policy == "fixed":
+            # Orden de llegada (por ID)
+            return sorted(aviones_en_espera, key=lambda p: p.unique_id)
+        
+        # ==========================================
+        # POLÍTICA 2: Prioridad de Combustible
+        # ==========================================
+        elif policy == "fuel_priority":
+            # Menos combustible = mayor prioridad
+            def fuel_score(p):
+                # Emergencias SIEMPRE primero
+                if p.emergencia:
+                    return 0  # Máxima prioridad
+                return p.combustible_restante  # Menor combustible = menor score
             
-            # Combustible: invertir para que menos combustible = mayor score
-            combustible_norm = 1.0 - (p.combustible_restante / 120.0)
-            combustible_norm = max(0, min(1, combustible_norm))
+            return sorted(aviones_en_espera, key=fuel_score)
+        
+        # ==========================================
+        # POLÍTICA 3: DINÁMICA (Multicriterio)
+        # ==========================================
+        else:  # "dynamic"
+            pesos = self._calcular_pesos_adaptativos()
             
-            # Tiempo en holding: normalizar con saturación en 30 ticks
-            holding_norm = min(p.holding_time / 30.0, 1.0)
-            
-            # ID: normalizar con el máximo ID actual
-            max_id = max(plane.unique_id for plane in aviones_en_espera)
-            id_norm = p.unique_id / max_id if max_id > 0 else 0
+            def calcular_score(p):
+                # 1. PRIORIDAD BASE
+                prioridad_norm = p.prioridad / 2.0
+                
+                # 2. COMBUSTIBLE
+                combustible_norm = 1.0 - (p.combustible_restante / 120.0)
+                combustible_norm = max(0, min(1, combustible_norm))
+                
+                # 3. TIEMPO EN HOLDING
+                holding_norm = min(p.holding_time / 30.0, 1.0)
+                
+                # 4. ID (FIFO como desempate)
+                max_id = max(plane.unique_id for plane in aviones_en_espera)
+                id_norm = p.unique_id / max_id if max_id > 0 else 0
+                
+                # 🆕 5. TIPO DE AERONAVE
+                type_weight = p.get_type_priority_weight()  # Heavy = 1.2, Medium = 1.0, Small = 0.8
+                
+                # 🆕 6. PUNTUALIDAD
+                punctuality_bonus = 0
+                if p.punctuality_status == "delayed":
+                    punctuality_bonus = 0.1  # Bonus para retrasados
+                elif p.punctuality_status == "early":
+                    punctuality_bonus = -0.05  # Penalización para adelantados
+                
+                # Score combinado
+                base_score = (
+                    prioridad_norm * pesos["prioridad"] +
+                    combustible_norm * pesos["combustible"] +
+                    holding_norm * pesos["holding"] +
+                    id_norm * pesos["fifo"]
+                )
+                
+                # Aplicar modificadores
+                final_score = base_score * type_weight + punctuality_bonus
+                
+                return final_score
             
             # ==========================================
-            # PASO 3: Combinar con pesos
+            # PASO 4: Ordenar de mayor a menor score
             # ==========================================
-            score = (
-                prioridad_norm * pesos["prioridad"] +
-                combustible_norm * pesos["combustible"] +
-                holding_norm * pesos["holding"] +
-                id_norm * pesos["fifo"]
-            )
             
-            return score
+            ordenado = sorted(aviones_en_espera, key=calcular_score, reverse=True)
+            
+            if ordenado != aviones_en_espera:
+                self.reordenamientos_realizados += 1
+            
+            return ordenado
         
-        # ==========================================
-        # PASO 4: Ordenar de mayor a menor score
-        # ==========================================
-        ordenado = sorted(aviones_en_espera, key=calcular_score, reverse=True)
-        
-        # Registrar si hubo cambios significativos en el orden
-        if ordenado != aviones_en_espera:
-            self.reordenamientos_realizados += 1
-        
-        return ordenado
     
     def _calcular_pesos_adaptativos(self):
         """
@@ -243,6 +266,7 @@ class ControlTower(Agent):
             "emergencias_atendidas": self.emergencias_atendidas,
             "desviaciones": self.desviaciones_autorizadas,
             "eficiencia": self._calcular_eficiencia_torre(),
+            "policy": getattr(self.model, "control_policy", "dynamic"),  # 🆕
         }
     
     def _calcular_eficiencia_torre(self):

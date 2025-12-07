@@ -3,17 +3,72 @@ from mesa import Agent
 import random
 import math
 
+# 🆕 TIPOS DE AERONAVE (Wake Turbulence Categories)
+AIRCRAFT_TYPES = {
+    "A320": {
+        "name": "Airbus A320",
+        "category": "Medium",  # Categoría de estela turbulenta
+        "takeoff_time": 5,
+        "landing_time": 4,
+        "priority_weight": 1.0,
+        "fuel_capacity": 100,
+        "icon": "✈️"
+    },
+    "B777": {
+        "name": "Boeing 777",
+        "category": "Heavy",
+        "takeoff_time": 8,
+        "landing_time": 6,
+        "priority_weight": 1.2,  # Mayor prioridad (vuelos largos)
+        "fuel_capacity": 150,
+        "icon": "🛫"
+    },
+    "E190": {
+        "name": "Embraer 190",
+        "category": "Small",
+        "takeoff_time": 3,
+        "landing_time": 3,
+        "priority_weight": 0.8,
+        "fuel_capacity": 80,
+        "icon": "🛩️"
+    },
+    "B737": {
+        "name": "Boeing 737",
+        "category": "Medium",
+        "takeoff_time": 5,
+        "landing_time": 4,
+        "priority_weight": 1.0,
+        "fuel_capacity": 95,
+        "icon": "✈️"
+    },
+    "A380": {
+        "name": "Airbus A380",
+        "category": "Super Heavy",
+        "takeoff_time": 10,
+        "landing_time": 8,
+        "priority_weight": 1.5,  # Máxima prioridad
+        "fuel_capacity": 200,
+        "icon": "🛬"
+    }
+}
+
 
 class Airplane(Agent):
     def __init__(self, unique_id, model, airline):
         super().__init__(unique_id, model)
 
         self.airline = airline
+        # 🆕 TIPO DE AERONAVE
+        self.aircraft_type = random.choice(list(AIRCRAFT_TYPES.keys()))
+        self.type_info = AIRCRAFT_TYPES[self.aircraft_type]
+
         self.flight_code = f"{self.airline.code} {unique_id:03d}"
 
         # Estados: arriving, holding, waiting, queued_departure, departing, diverted, gone
         self.state = "arriving"
-        self.wait_time = self.model.turn_time
+        # 🆕 Tiempo de giro ajustado por tipo
+        self.wait_time = self.type_info["landing_time"]
+
 
         self.center = (model.grid.width // 2, model.grid.height // 2)
         self.spawn_pos = self.random_edge()
@@ -27,13 +82,46 @@ class Airplane(Agent):
         self.angle = random.random() * 2 * math.pi
 
         # Prioridad y emergencia
-        self.combustible_restante = random.randint(60, 120)
+        max_fuel = self.type_info["fuel_capacity"]
+        self.combustible_restante = random.randint(
+            int(max_fuel * 0.5), 
+            max_fuel
+        )
+        
+        # 🆕 PUNTUALIDAD (nuevo sistema)
+        self.scheduled_arrival_time = random.randint(60, 240)  # minutos
+        self.actual_arrival_time = 0
+        self.punctuality_status = "on_time"
         self.prioridad = 0
         self.emergencia = False
         self.goaround_blink = 0
         
         # 🆕 TRACKING: registrar si este avión ya fue contabilizado como emergencia
         self.emergencia_registrada = False
+
+    def update_punctuality(self):
+        """Actualiza el estado de puntualidad del vuelo."""
+        diff = self.actual_arrival_time - self.scheduled_arrival_time
+        
+        if diff < -10:
+            self.punctuality_status = "early"
+            # Los vuelos adelantados tienen MENOR prioridad
+            if self.prioridad == 0:
+                self.prioridad = 0
+        elif diff > 10:
+            self.punctuality_status = "delayed"
+            # Los vuelos retrasados tienen MAYOR prioridad
+            if self.prioridad == 0:
+                self.prioridad = 1
+        else:
+            self.punctuality_status = "on_time"
+
+    def get_type_priority_weight(self):
+        """
+        Retorna el peso de prioridad según tipo de aeronave.
+        Heavy/Super Heavy tienen mayor prioridad.
+        """
+        return self.type_info["priority_weight"]
 
     def random_edge(self):
         w, h = self.model.grid.width, self.model.grid.height
@@ -93,6 +181,10 @@ class Airplane(Agent):
             self.model.grid.move_agent(self, new_pos)
 
     def step(self):
+
+        # Actualizar tiempo real del vuelo
+        self.actual_arrival_time += self.model.minutes_per_step
+        
         # GO-AROUND: cuenta atrás
         if getattr(self, "goaround_blink", 0) > 0:
             self.goaround_blink -= 1
